@@ -18,7 +18,7 @@
 package org.apache.spark.sql.catalyst.plans.logical
 
 import org.apache.spark.sql.catalyst.analysis.ViewType
-import org.apache.spark.sql.catalyst.catalog.{BucketSpec, FunctionResource}
+import org.apache.spark.sql.catalyst.catalog.{BucketSpec, CatalogStorageFormat, FunctionResource}
 import org.apache.spark.sql.catalyst.catalog.CatalogTypes.TablePartitionSpec
 import org.apache.spark.sql.catalyst.expressions.Attribute
 import org.apache.spark.sql.connector.catalog.TableChange.ColumnPosition
@@ -341,6 +341,18 @@ case class ShowTableStatement(
     namespace: Option[Seq[String]],
     pattern: String,
     partitionSpec: Option[TablePartitionSpec])
+  extends ParsedStatement
+
+/**
+ * A CREATE TABLE LIKE statement, as parsed from SQL.
+ */
+case class CreateTableLikeStatement(
+    targetTable: Seq[String],
+    sourceTable: Seq[String],
+    fileFormat: CatalogStorageFormat,
+    provider: Option[String],
+    properties: Map[String, String] = Map.empty,
+    ifNotExists: Boolean)
   extends ParsedStatement
 
 /**

@@ -2177,4 +2177,83 @@ class DDLParserSuite extends AnalysisTest {
 
     testCreateOrReplaceDdl(sql, expectedTableSpec, expectedIfNotExists = false)
   }
+
+  test("create table like") {
+    val v1 = "CREATE TABLE table1 LIKE table2"
+    val (target, source, fileFormat, provider, properties, exists) =
+      parsePlan(v1).collect {
+        case CreateTableLikeStatement(t, s, f, p, pr, e) => (t, s, f, p, pr, e)
+      }.head
+    assert(exists == false)
+    assert(target == Seq("table1"))
+    assert(source == Seq("table2"))
+    assert(fileFormat.locationUri.isEmpty)
+    assert(provider.isEmpty)
+
+    val v2 = "CREATE TABLE IF NOT EXISTS table1 LIKE table2"
+    val (target2, source2, fileFormat2, provider2, properties2, exists2) =
+      parsePlan(v2).collect {
+        case CreateTableLikeStatement(t, s, f, p, pr, e) => (t, s, f, p, pr, e)
+      }.head
+    assert(exists2)
+    assert(target2 == Seq("table1"))
+    assert(source2 == Seq("table2"))
+    assert(fileFormat2.locationUri.isEmpty)
+    assert(provider2.isEmpty)
+
+    val v3 = "CREATE TABLE table1 LIKE table2 LOCATION '/spark/warehouse'"
+    val (target3, source3, fileFormat3, provider3, properties3, exists3) =
+      parsePlan(v3).collect {
+        case CreateTableLikeStatement(t, s, f, p, pr, e) => (t, s, f, p, pr, e)
+      }.head
+    assert(!exists3)
+    assert(target3 == Seq("table1"))
+    assert(source3 == Seq("table2"))
+    assert(fileFormat3.locationUri.map(_.toString) == Some("/spark/warehouse"))
+    assert(provider3.isEmpty)
+
+    val v4 = "CREATE TABLE IF NOT EXISTS table1 LIKE table2 LOCATION '/spark/warehouse'"
+    val (target4, source4, fileFormat4, provider4, properties4, exists4) =
+      parsePlan(v4).collect {
+        case CreateTableLikeStatement(t, s, f, p, pr, e) => (t, s, f, p, pr, e)
+      }.head
+    assert(exists4)
+    assert(target4 == Seq("table1"))
+    assert(source4 == Seq("table2"))
+    assert(fileFormat4.locationUri.map(_.toString) == Some("/spark/warehouse"))
+    assert(provider4.isEmpty)
+
+    val v5 = "CREATE TABLE IF NOT EXISTS table1 LIKE table2 USING parquet"
+    val (target5, source5, fileFormat5, provider5, properties5, exists5) =
+      parsePlan(v5).collect {
+        case CreateTableLikeStatement(t, s, f, p, pr, e) => (t, s, f, p, pr, e)
+      }.head
+    assert(exists5)
+    assert(target5 == Seq("table1"))
+    assert(source5 == Seq("table2"))
+    assert(fileFormat5.locationUri.isEmpty)
+    assert(provider5 == Some("parquet"))
+
+    val v6 = "CREATE TABLE IF NOT EXISTS table1 LIKE table2 USING ORC"
+    val (target6, source6, fileFormat6, provider6, properties6, exists6) =
+      parsePlan(v6).collect {
+        case CreateTableLikeStatement(t, s, f, p, pr, e) => (t, s, f, p, pr, e)
+      }.head
+    assert(exists6)
+    assert(target6 == Seq("table1"))
+    assert(source6 == Seq("table2"))
+    assert(fileFormat6.locationUri.isEmpty)
+    assert(provider6 == Some("ORC"))
+
+    val v7 = "CREATE TABLE a.b.c LIKE d.e.f"
+    val (target7, source7, fileFormat7, provider7, properties7, exists7) =
+      parsePlan(v7).collect {
+        case CreateTableLikeStatement(t, s, f, p, pr, e) => (t, s, f, p, pr, e)
+      }.head
+    assert(exists7 == false)
+    assert(target7 == Seq("a", "b", "c"))
+    assert(source7 == Seq("d", "e", "f"))
+    assert(fileFormat7.locationUri.isEmpty)
+    assert(provider7.isEmpty)
+  }
 }

@@ -19,7 +19,6 @@ package org.apache.spark.sql.internal
 
 import java.util.Locale
 
-import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.catalyst.catalog.CatalogStorageFormat
 
 case class HiveSerDe(
@@ -104,24 +103,4 @@ object HiveSerDe {
    */
   def serdeToSource(serde: HiveSerDe): Option[String] = serdeInverseMap.get(serde)
 
-  def getDefaultStorage(conf: SQLConf): CatalogStorageFormat = {
-    // To respect hive-site.xml, it peeks Hadoop configuration from existing Spark session,
-    // as an easy workaround. See SPARK-27555.
-    val defaultFormatKey = "hive.default.fileformat"
-    val defaultValue = {
-      val defaultFormatValue = "textfile"
-      SparkSession.getActiveSession.map { session =>
-        session.sessionState.newHadoopConf().get(defaultFormatKey, defaultFormatValue)
-      }.getOrElse(defaultFormatValue)
-    }
-    val defaultStorageType = conf.getConfString("hive.default.fileformat", defaultValue)
-    val defaultHiveSerde = sourceToSerDe(defaultStorageType)
-    CatalogStorageFormat.empty.copy(
-      inputFormat = defaultHiveSerde.flatMap(_.inputFormat)
-        .orElse(Some("org.apache.hadoop.mapred.TextInputFormat")),
-      outputFormat = defaultHiveSerde.flatMap(_.outputFormat)
-        .orElse(Some("org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat")),
-      serde = defaultHiveSerde.flatMap(_.serde)
-        .orElse(Some("org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe")))
-  }
 }

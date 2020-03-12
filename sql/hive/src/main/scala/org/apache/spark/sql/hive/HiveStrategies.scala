@@ -32,7 +32,7 @@ import org.apache.spark.sql.execution._
 import org.apache.spark.sql.execution.command.{CreateTableCommand, DDLUtils}
 import org.apache.spark.sql.execution.datasources.CreateTable
 import org.apache.spark.sql.hive.execution._
-import org.apache.spark.sql.internal.{HiveSerDe, SQLConf}
+import org.apache.spark.sql.internal.{HiveSerDe, HiveSerDeDef, SQLConf}
 
 
 /**
@@ -48,7 +48,7 @@ class ResolveHiveSerdeTable(session: SparkSession) extends Rule[LogicalPlan] {
         throw new AnalysisException("Creating bucketed Hive serde table is not supported yet.")
       }
 
-      val defaultStorage = HiveSerDe.getDefaultStorage(session.sessionState.conf)
+      val defaultStorage = HiveSerDeDef.getDefaultStorage(session.sessionState.conf)
       val options = new HiveOptions(table.storage.properties)
 
       val fileStorage = if (options.fileFormat.isDefined) {

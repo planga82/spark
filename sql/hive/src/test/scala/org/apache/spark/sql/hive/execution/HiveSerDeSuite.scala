@@ -20,7 +20,6 @@ package org.apache.spark.sql.hive.execution
 import java.net.URI
 
 import org.scalatest.BeforeAndAfterAll
-
 import org.apache.spark.sql.{AnalysisException, SaveMode, SparkSession}
 import org.apache.spark.sql.catalyst.catalog.CatalogTable
 import org.apache.spark.sql.catalyst.plans.PlanTest
@@ -28,7 +27,7 @@ import org.apache.spark.sql.execution.command.{CreateTableCommand, DDLUtils}
 import org.apache.spark.sql.execution.datasources.CreateTable
 import org.apache.spark.sql.execution.metric.InputOutputMetricsHelper
 import org.apache.spark.sql.hive.test.TestHive
-import org.apache.spark.sql.internal.{HiveSerDe, SQLConf}
+import org.apache.spark.sql.internal.{HiveSerDe, HiveSerDeDef, SQLConf}
 import org.apache.spark.sql.types.StructType
 
 /**
@@ -225,12 +224,12 @@ class HiveSerDeSuite extends HiveComparisonTest with PlanTest with BeforeAndAfte
     try {
       testSession.sparkContext.hadoopConfiguration.set("hive.default.fileformat", "parquetfile")
       val sqlConf = new SQLConf()
-      var storageFormat = HiveSerDe.getDefaultStorage(sqlConf)
+      var storageFormat = HiveSerDeDef.getDefaultStorage(sqlConf)
       assert(storageFormat.serde.
         contains("org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe"))
       // should take orc as it is present in sqlConf
       sqlConf.setConfString("hive.default.fileformat", "orc")
-      storageFormat = HiveSerDe.getDefaultStorage(sqlConf)
+      storageFormat = HiveSerDeDef.getDefaultStorage(sqlConf)
       assert(storageFormat.serde.contains("org.apache.hadoop.hive.ql.io.orc.OrcSerde"))
     }
     finally {

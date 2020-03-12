@@ -18,19 +18,18 @@
 package org.apache.spark.sql.catalyst.parser
 
 import java.util.Locale
+
 import javax.xml.bind.DatatypeConverter
 
 import scala.collection.JavaConverters._
 import scala.collection.mutable.ArrayBuffer
-
 import org.antlr.v4.runtime.{ParserRuleContext, Token}
 import org.antlr.v4.runtime.tree.{ParseTree, RuleNode, TerminalNode}
-
 import org.apache.spark.internal.Logging
 import org.apache.spark.sql.AnalysisException
 import org.apache.spark.sql.catalyst.{FunctionIdentifier, TableIdentifier}
 import org.apache.spark.sql.catalyst.analysis._
-import org.apache.spark.sql.catalyst.catalog.{BucketSpec, CatalogStorageFormat, FunctionResource, FunctionResourceType}
+import org.apache.spark.sql.catalyst.catalog.{BucketSpec, CatalogStorageFormat, CatalogUtils, FunctionResource, FunctionResourceType}
 import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.expressions.aggregate.{First, Last}
 import org.apache.spark.sql.catalyst.parser.SqlBaseParser._
@@ -41,8 +40,8 @@ import org.apache.spark.sql.catalyst.util.IntervalUtils
 import org.apache.spark.sql.catalyst.util.IntervalUtils.IntervalUnit
 import org.apache.spark.sql.connector.catalog.{SupportsNamespaces, TableCatalog}
 import org.apache.spark.sql.connector.catalog.TableChange.ColumnPosition
-import org.apache.spark.sql.connector.expressions.{ApplyTransform, BucketTransform, DaysTransform, Expression => V2Expression, FieldReference, HoursTransform, IdentityTransform, LiteralValue, MonthsTransform, Transform, YearsTransform}
-import org.apache.spark.sql.internal.SQLConf
+import org.apache.spark.sql.connector.expressions.{ApplyTransform, BucketTransform, DaysTransform, FieldReference, HoursTransform, IdentityTransform, LiteralValue, MonthsTransform, Transform, YearsTransform, Expression => V2Expression}
+import org.apache.spark.sql.internal.{HiveSerDe, SQLConf}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.{CalendarInterval, UTF8String}
 import org.apache.spark.util.random.RandomSampler
@@ -2840,6 +2839,180 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
         ReplaceTableStatement(table, schema.getOrElse(new StructType), partitioning,
           bucketSpec, properties, provider, options, location, comment, orCreate = orCreate)
     }
+  }
+
+   /**
+   * Create a [[CreateTableLikeStatement]].
+   *
+   * For example:
+   * {{{
+   *   CREATE TABLE [IF NOT EXISTS] [db_name.]table_name
+   *   LIKE [other_db_name.]existing_table_name
+   *   [USING provider |
+   *    [
+   *     [ROW FORMAT row_format]
+   *     [STORED AS file_format] [WITH SERDEPROPERTIES (...)]
+   *    ]
+   *   ]
+   *   [locationSpec]
+   *   [TBLPROPERTIES (property_name=property_value, ...)]
+   * }}}
+   */
+  override def visitCreateTableLike(ctx: CreateTableLikeContext): LogicalPlan = withOrigin(ctx) {
+    val targetTable = visitMultipartIdentifier(ctx.target)
+    val sourceTable = visitMultipartIdentifier(ctx.source)
+    checkDuplicateClauses(ctx.tableProvider, "PROVIDER", ctx)
+    checkDuplicateClauses(ctx.createFileFormat, "STORED AS/BY", ctx)
+    checkDuplicateClauses(ctx.rowFormat, "ROW FORMAT", ctx)
+    checkDuplicateClauses(ctx.locationSpec, "LOCATION", ctx)
+    checkDuplicateClauses(ctx.TBLPROPERTIES, "TBLPROPERTIES", ctx)
+    val provider = ctx.tableProvider.asScala.headOption.map(_.multipartIdentifier.getText)
+    val location = visitLocationSpecList(ctx.locationSpec())
+    // rowStorage used to determine CatalogStorageFormat.serde and
+    // CatalogStorageFormat.properties in STORED AS clause.
+    val rowStorage = ctx.rowFormat.asScala.headOption.map(visitRowFormat)
+      .getOrElse(CatalogStorageFormat.empty)
+    val fileFormat = ctx.createFileFormat.asScala.headOption.map(visitCreateFileFormat) match {
+      case Some(f) =>
+        if (provider.isDefined) {
+          throw new ParseException("'STORED AS hiveFormats' and 'USING provider' " +
+            "should not be specified both", ctx)
+        }
+        f.copy(
+          locationUri = location.map(CatalogUtils.stringToURI),
+          serde = rowStorage.serde.orElse(f.serde),
+          properties = rowStorage.properties ++ f.properties)
+      case None =>
+        if (rowStorage.serde.isDefined) {
+          throw new ParseException("'ROW FORMAT' must be used with 'STORED AS'", ctx)
+        }
+        CatalogStorageFormat.empty.copy(locationUri = location.map(CatalogUtils.stringToURI))
+    }
+    val properties = Option(ctx.tableProps).map(visitPropertyKeyValues).getOrElse(Map.empty)
+    CreateTableLikeStatement(
+      targetTable, sourceTable, fileFormat, provider, properties, ctx.EXISTS != null)
+  }
+
+  /**
+   * Create a [[CatalogStorageFormat]] used for creating tables.
+   *
+   * Example format:
+   * {{{
+   *   SERDE serde_name [WITH SERDEPROPERTIES (k1=v1, k2=v2, ...)]
+   * }}}
+   *
+   * OR
+   *
+   * {{{
+   *   DELIMITED [FIELDS TERMINATED BY char [ESCAPED BY char]]
+   *   [COLLECTION ITEMS TERMINATED BY char]
+   *   [MAP KEYS TERMINATED BY char]
+   *   [LINES TERMINATED BY char]
+   *   [NULL DEFINED AS char]
+   * }}}
+   */
+  def visitRowFormat(ctx: RowFormatContext): CatalogStorageFormat = withOrigin(ctx) {
+    ctx match {
+      case serde: RowFormatSerdeContext => visitRowFormatSerde(serde)
+      case delimited: RowFormatDelimitedContext => visitRowFormatDelimited(delimited)
+    }
+  }
+
+  /**
+   * Create SERDE row format name and properties pair.
+   */
+  override def visitRowFormatSerde(
+      ctx: RowFormatSerdeContext): CatalogStorageFormat = withOrigin(ctx) {
+    import ctx._
+    CatalogStorageFormat.empty.copy(
+      serde = Option(string(name)),
+      properties = Option(tablePropertyList).map(visitPropertyKeyValues).getOrElse(Map.empty))
+  }
+
+  /**
+   * Create a delimited row format properties object.
+   */
+  override def visitRowFormatDelimited(
+      ctx: RowFormatDelimitedContext): CatalogStorageFormat = withOrigin(ctx) {
+    // Collect the entries if any.
+    def entry(key: String, value: Token): Seq[(String, String)] = {
+      Option(value).toSeq.map(x => key -> string(x))
+    }
+    // TODO we need proper support for the NULL format.
+    val entries =
+      entry("field.delim", ctx.fieldsTerminatedBy) ++
+        entry("serialization.format", ctx.fieldsTerminatedBy) ++
+        entry("escape.delim", ctx.escapedBy) ++
+        // The following typo is inherited from Hive...
+        entry("colelction.delim", ctx.collectionItemsTerminatedBy) ++
+        entry("mapkey.delim", ctx.keysTerminatedBy) ++
+        Option(ctx.linesSeparatedBy).toSeq.map { token =>
+          val value = string(token)
+          validate(
+            value == "\n",
+            s"LINES TERMINATED BY only supports newline '\\n' right now: $value",
+            ctx)
+          "line.delim" -> value
+        }
+    CatalogStorageFormat.empty.copy(properties = entries.toMap)
+  }
+
+  /**
+   * Create a [[CatalogStorageFormat]] for creating tables.
+   *
+   * Format: STORED AS ...
+   */
+  override def visitCreateFileFormat(
+      ctx: CreateFileFormatContext): CatalogStorageFormat = withOrigin(ctx) {
+    (ctx.fileFormat, ctx.storageHandler) match {
+      // Expected format: INPUTFORMAT input_format OUTPUTFORMAT output_format
+      case (c: TableFileFormatContext, null) =>
+        visitTableFileFormat(c)
+      // Expected format: SEQUENCEFILE | TEXTFILE | RCFILE | ORC | PARQUET | AVRO
+      case (c: GenericFileFormatContext, null) =>
+        visitGenericFileFormat(c)
+      case (null, storageHandler) =>
+        operationNotAllowed("STORED BY", ctx)
+      case _ =>
+        throw new ParseException("Expected either STORED AS or STORED BY, not both", ctx)
+    }
+  }
+
+  /**
+   * Resolve a [[HiveSerDe]] based on the name given and return it as a [[CatalogStorageFormat]].
+   */
+  override def visitGenericFileFormat(
+      ctx: GenericFileFormatContext): CatalogStorageFormat = withOrigin(ctx) {
+    val source = ctx.identifier.getText
+    HiveSerDe.sourceToSerDe(source) match {
+      case Some(s) =>
+        CatalogStorageFormat.empty.copy(
+          inputFormat = s.inputFormat,
+          outputFormat = s.outputFormat,
+          serde = s.serde)
+      case None =>
+        operationNotAllowed(s"STORED AS with file format '$source'", ctx)
+    }
+//    HiveSerDe.sourceToSerDe(source) match {
+//      case Some(s) =>
+//        CatalogStorageFormat.empty.copy(
+//          inputFormat = s.inputFormat,
+//          outputFormat = s.outputFormat,
+//          serde = s.serde)
+//      case None =>
+//        operationNotAllowed(s"STORED AS with file format '$source'", ctx)
+//    }
+  }
+
+
+  /**
+   * Create a [[CatalogStorageFormat]].
+   */
+  override def visitTableFileFormat(
+      ctx: TableFileFormatContext): CatalogStorageFormat = withOrigin(ctx) {
+    CatalogStorageFormat.empty.copy(
+      inputFormat = Option(string(ctx.inFmt)),
+      outputFormat = Option(string(ctx.outFmt)))
   }
 
   /**

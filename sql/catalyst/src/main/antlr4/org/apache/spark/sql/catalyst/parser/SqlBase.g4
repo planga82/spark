@@ -142,8 +142,8 @@ statement
         locationSpec |
         (TBLPROPERTIES tableProps=tablePropertyList))*
         (AS? query)?                                                   #createHiveTable
-    | CREATE TABLE (IF NOT EXISTS)? target=tableIdentifier
-        LIKE source=tableIdentifier
+    | CREATE TABLE (IF NOT EXISTS)? target=multipartIdentifier
+        LIKE source=multipartIdentifier
         (tableProvider |
         rowFormat |
         createFileFormat |
