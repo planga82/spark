@@ -23,7 +23,7 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.catalyst.plans._
 import org.apache.spark.sql.catalyst.plans.logical._
 import org.apache.spark.sql.internal.SQLConf
-import org.apache.spark.sql.types.IntegerType
+import org.apache.spark.sql.types.{BooleanType, IntegerType}
 
 /**
  * Parser test cases for rules defined in [[CatalystSqlParser]] / [[AstBuilder]].
@@ -199,6 +199,34 @@ class PlanParserSuite extends AnalysisTest {
     intercept(
       "with cte1 (select 1), cte1 as (select 1 from cte1) select * from cte1",
       "CTE definition can't have duplicate names: 'cte1'.")
+  }
+
+  test("Qualify query") {
+    assertEqual(
+      "select x from t qualify row_number() over (partition by p order by o) = 1",
+      table("t").select('x)
+        .qualify(WindowExpression('row_number.function(),
+          WindowSpecDefinition(Seq('p), Seq('o.asc), UnspecifiedFrame)) === 1)
+    )
+
+    assertEqual("select i, p, o, row_number() over (partition by p order by o) as row_num " +
+      "from t qualify row_num = 1",
+      table("t").select('i, 'p, 'o, WindowExpression('row_number.function(),
+        WindowSpecDefinition(Seq('p), Seq('o.asc), UnspecifiedFrame)).as("row_num"))
+        .qualify('row_num === 1)
+    )
+
+    assertEqual(
+      "select c2, sum(c3) over (partition by c2) as r from t where c3 < 4 " +
+        "qualify r in ( select min(c1) from test group by c2 having min(c1) > 3)",
+      table("t").where('c3 < 4)
+        .select('c2, WindowExpression('sum.function('c3),
+        WindowSpecDefinition(Seq('c2), Seq.empty, UnspecifiedFrame)).as("r"))
+        .qualify('r.in(ListQuery(
+          table("test")
+            .having('c2)(UnresolvedAlias('min.function('c1)))('min.function('c1) > 3)
+        )))
+    )
   }
 
   test("simple select query") {

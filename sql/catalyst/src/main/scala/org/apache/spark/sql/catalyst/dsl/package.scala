@@ -372,6 +372,10 @@ package object dsl {
           groupBy(groupingExprs: _*)(aggregateExprs: _*).asInstanceOf[Aggregate])
       }
 
+      def qualify(qualifyExpressions: Expression): LogicalPlan = {
+        UnresolvedQualify(qualifyExpressions, logicalPlan)
+      }
+
       def window(
           windowExpressions: Seq[NamedExpression],
           partitionSpec: Seq[Expression],

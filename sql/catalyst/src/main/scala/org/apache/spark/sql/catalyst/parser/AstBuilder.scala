@@ -166,6 +166,7 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
         ctx.aggregationClause,
         ctx.havingClause,
         ctx.windowClause,
+        ctx.qualifyClause(),
         plan
       )
     }
@@ -607,6 +608,7 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
       ctx.aggregationClause,
       ctx.havingClause,
       ctx.windowClause,
+      ctx.qualifyClause,
       from
     )
   }
@@ -635,6 +637,18 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
       case _ =>
         Filter(predicate, plan)
     }
+  }
+
+  /**
+   * Create a logical plan using a Qualify clause.
+   */
+  private def withQualifyClause(
+      ctx: QualifyClauseContext, plan: LogicalPlan): LogicalPlan = {
+    val predicate = expression(ctx.booleanExpression) match {
+      case p: Predicate => p
+      case e => Cast(e, BooleanType)
+    }
+    UnresolvedQualify(predicate, plan)
   }
 
   /**
@@ -705,6 +719,7 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
       aggregationClause: AggregationClauseContext,
       havingClause: HavingClauseContext,
       windowClause: WindowClauseContext,
+      qualifyClause: QualifyClauseContext,
       relation: LogicalPlan): LogicalPlan = withOrigin(ctx) {
     // Add lateral views.
     val withLateralView = lateralView.asScala.foldLeft(relation)(withGenerate)
@@ -753,8 +768,10 @@ class AstBuilder(conf: SQLConf) extends SqlBaseBaseVisitor[AnyRef] with Logging 
     // Window
     val withWindow = withDistinct.optionalMap(windowClause)(withWindowClause)
 
+    val withQualify = withWindow.optionalMap(qualifyClause)(withQualifyClause)
+
     // Hint
-    selectClause.hints.asScala.foldRight(withWindow)(withHints)
+    selectClause.hints.asScala.foldRight(withQualify)(withHints)
   }
 
   /**

@@ -501,6 +501,7 @@ fromStatementBody
       aggregationClause?
       havingClause?
       windowClause?
+      qualifyClause?
       queryOrganization
     ;
 
@@ -514,7 +515,8 @@ querySpecification
       whereClause?
       aggregationClause?
       havingClause?
-      windowClause?                                                         #regularQuerySpecification
+      windowClause?
+      qualifyClause?                                                        #regularQuerySpecification
     ;
 
 transformClause
@@ -570,6 +572,10 @@ whereClause
 
 havingClause
     : HAVING booleanExpression
+    ;
+
+qualifyClause
+    : QUALIFY booleanExpression
     ;
 
 hint
@@ -1319,6 +1325,7 @@ nonReserved
     | GROUP
     | GROUPING
     | HAVING
+    | QUALIFY
     | HOUR
     | IF
     | IGNORE
@@ -1569,6 +1576,7 @@ GRANT: 'GRANT';
 GROUP: 'GROUP';
 GROUPING: 'GROUPING';
 HAVING: 'HAVING';
+QUALIFY: 'QUALIFY';
 HOUR: 'HOUR';
 IF: 'IF';
 IGNORE: 'IGNORE';
